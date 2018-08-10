@@ -3,6 +3,7 @@
 # fswatch ./wip.rb | xargs -n1 -I{} ruby ./wip.rb
 
 require 'open3'
+#require 'pp'
 
 # Represents a set of test data comprising the result of a single test.
 #
@@ -171,7 +172,7 @@ class Wip
         print "#{ANSI_PRE_MAYBE}#{datum.value}"
         print " (#{datum.meta})" unless datum.meta.to_s.empty?
       when :bad
-        print "#{ANSI_PRE_BAD}#{result.value}"
+        print "#{ANSI_PRE_BAD}#{datum.value}"
         print " (#{datum.meta})" unless datum.meta.to_s.empty?
       else
         print datum.value
@@ -185,10 +186,9 @@ class Wip
   # -----------------------------------------------------------------------------
 
   def self.test_working_directory
-    TestResult.new('Working directory',
-                   [
-                     TestDatum.new(Dir.pwd, :neutral)
-                   ])
+    return TestResult.new('Working directory',
+                   [ TestDatum.new(Dir.pwd, :neutral) ]),
+           Dir.pwd
   end
 
   # -----------------------------------------------------------------------------
@@ -196,15 +196,21 @@ class Wip
   # -----------------------------------------------------------------------------
 
   def self.test_rubymotion_version
+    result = TestResult.new 'RubyMotion version'
+
     cmd_name = 'motion'
     cmd = CommandResult.new "#{cmd_name} --version"
-    result = TestResult.new 'RubyMotion version'
 
     # TODO: are some versions considered deprecated? EOL?
     case cmd.status
     when :success
-      result.add(TestDatum.new cmd.stdout.chop,
+      version_str = cmd.stdout.chop
+      result.add(TestDatum.new version_str,
                                :good)
+      version = {
+        :major => version_str.sub(/^(\d+).\d+$/, '\1').to_i,
+        :minor => version_str.sub(/^\d+.(\d+)$/, '\1').to_i,
+      }
     when :not_found
       result.add(TestDatum.new 'Not found',
                                :bad)
@@ -217,18 +223,26 @@ class Wip
                                :bad,
                                "System reports: '#{cmd.syserror.message}'")
     end
-    result
+    return result, version
   end
 
   def self.test_rbenv_version
+    result = TestResult.new 'rbenv version'
+
     cmd_name = 'rbenv'
     cmd = CommandResult.new "#{cmd_name} --version"
-    result = TestResult.new 'rbenv version'
 
     case cmd.status
     when :success
+      version_str = cmd.stdout.split(' ')[1]
+      version_split = version_str.split('.')
+      version = {
+        :major => version_split[0],
+        :minor => version_split[1],
+        :very_minor => version_split[2],
+      }
       result.add(
-        TestDatum.new cmd.stdout.split(' ')[1],
+        TestDatum.new version_str,
                       :neutral)
     when :not_found
       result.add(TestDatum.new 'Not found',
@@ -247,7 +261,8 @@ class Wip
                       :bad,
                       "System reports: '#{cmd.syserror.message}'")
     end
-    result
+
+    return result, version
   end
 
 
@@ -255,26 +270,34 @@ class Wip
   # version parity.
   def self.test_xcode_version rm_version
 
+    rm_5_7 = { :major => 5, :minor => 7 }
+    rm_5_8 = { :major => 5, :minor => 8 }
+    rm_5_9 = { :major => 5, :minor => 9 }
+    rm_5_10 = { :major => 5, :minor => 10 }
+
+    xc_9_2 = { :major => 9, :minor => 2, :very_minor => 0 }
+    xc_9_3 = { :major => 9, :minor => 3, :very_minor => 0 }
+    xc_9_4 = { :major => 9, :minor => 4, :very_minor => 0 }
+
     rm_to_xcode_parities = {
-      "5.7"  => "9.2",
-      "5.8"  => "9.3",
-      "5.9"  => "9.4",
-      "5.10" => "9.4",
-      # We'll assume we want the latest if the RM version test failed
-      :rm_version_unknown => "9.4",
+      rm_5_7 => xc_9_2,
+      rm_5_8 => xc_9_3,
+      rm_5_9 => xc_9_4,
+      rm_5_10 => xc_9_4,
     }
     expected_version = rm_to_xcode_parities[rm_version]
+    expected_version ||= xc_9_4
 
     result = TestResult.new 'Xcode version'
 
     # Bail early if xcode-select doesn't give us a valid path. This indicates
     # that Xcode isn't installed at all, and we'll just wind up prompting the
     # user to install Xcode when we try to run `xcodebuild` below.
-    if !test_xcode_select_path.data[0].is_good?
+    if test_xcode_select_path[1].nil?
       result.add(
         TestDatum.new 'Not installed',
                       :bad)
-      return result
+      return result, nil
     end
 
     cmd_name = 'xcodebuild'
@@ -282,17 +305,29 @@ class Wip
 
     case cmd.status
     when :success
-      version = cmd.stdout.split("\n")[0].split(' ')[1]
-      datum = TestDatum.new version
+      version_str = cmd.stdout.split("\n")[0].split(' ')[1]
+      version_split = version_str.split('.')
+      version = {
+        :major => version_split[0].to_i,
+        :minor => version_split[1].to_i,
+        :very_minor => version_split[2].to_i
+      }
+      datum = TestDatum.new version_str
       if version != expected_version
-        datum.meta = "expected #{expected_version}"
-        # What program is complete without gnarly regexps?
-        # This (hopefully) detects subversions of the expected version
-        version_subregexp = expected_version.gsub(/\./, '\.')
-        isminor_regexp = Regexp.new("^#{version_subregexp}(\\.[0-9\\.]+)?$")
-        is_minor = version.match(isminor_regexp)
-        # Minor versions of expected are *maybe* okay.
-        datum.status = is_minor ? :maybe : :bad
+        datum.meta = "expected #{expected_version[:major]}" \
+                     ".#{expected_version[:minor]}" \
+                     ".#{expected_version[:very_minor]}"
+        datum.status =
+          # Having a very minor version above the expected is *maybe* okay.
+          # TODO: This might be perfectly fine. Ask Amir. 9.4.1 is current, so
+          # this is going to flag for a decent number of people.
+          if version[:major] = expected_version[:major] and
+            version[:minor] = expected_version[:minor] and
+            version[:very_minor] > expected_version[:very_minor]
+            :maybe
+          else
+            :bad
+          end
       end
       result.add datum
     when :not_found
@@ -311,7 +346,7 @@ class Wip
                       :bad,
                       "System reports: '#{cmd.syserror.message}'")
     end
-    result
+    return result, version
   end
 
   def self.test_xcode_select_version
@@ -330,10 +365,11 @@ class Wip
     # Xcode, and would be relegated to the OSX version.
     case cmd.status
     when :success
-      version = cmd.stdout.chop.sub(/^xcode-select version ([\.\d]+)\.$/, '\1')
-      if version == '2349'
+      version_str = cmd.stdout.chop.sub(/^xcode-select version ([\.\d]+)\.$/, '\1')
+      version = version_str.to_i
+      if version == 2349
         result.add(
-          TestDatum.new version,
+          TestDatum.new version_str,
                         :good)
       else
         result.add(
@@ -356,7 +392,7 @@ class Wip
                       :bad,
                       "System reports: '#{cmd.syserror.message}'")
     end
-    result
+    return result, version
   end
 
   def self.test_xcode_select_path
@@ -418,12 +454,13 @@ class Wip
                       :bad,
                       "System reports: '#{cmd.syserror.message}'")
     end
-    result
+    return result, path
   end
 
-  def self.test_frameworks framework_name, framework_subdir
-    # TODO: Are any of the frameworks considered mandatory?
+  def self.test_frameworks framework_name,
+                           framework_subdir=framework_name.downcase
 
+    # TODO: Are any of the frameworks considered mandatory?
     result = TestResult.new "Supported #{framework_name} frameworks"
     rm_data_path = '/Library/RubyMotion/data'
     framework_path = "#{rm_data_path}/#{framework_subdir}"
@@ -433,12 +470,12 @@ class Wip
         TestDatum.new 'RubyMotion data directory not found',
                       :bad,
                       rm_data_path)
-      return result
+      return result, nil
     end
 
     if !File.exists? framework_path
       result.add(TestDatum.new 'None', :neutral)
-      return result
+      return result, nil
     end
 
     if !File.directory? framework_path
@@ -446,21 +483,28 @@ class Wip
         TestDatum.new 'Indeterminate',
                       :bad,
                       "#{framework_path} is a file -- expected directory")
-      return result
+      return result, nil
     end
 
+    frameworks = []
     Dir.entries(framework_path).each do |entry|
       if File.directory? "#{framework_path}/#{entry}" and
         entry.match('^\d+(\.\d+)*$')
-
         result.add(TestDatum.new entry, :neutral)
+        entry_split = entry.split('.')
+        framework_version = {
+          :major => entry_split[0].to_i,
+          :minor => entry_split[1].to_i,
+          :very_minor => entry_split[2].to_i
+        }
+        frameworks << framework_version
       end
     end
     if result.data.count == 0
       result.add(TestDatum.new 'None', :neutral)
     end
 
-    result
+    return result, frameworks
   end
 
   # -----------------------------------------------------------------------------
@@ -468,37 +512,64 @@ class Wip
   # -----------------------------------------------------------------------------
 
   def self.run_environment_tests
+    environment = {}
     print_section_header "Environment"
-    print_test_result test_working_directory
+
+    result, environment[:wd] = test_working_directory
+    print_test_result result
+
+    environment
   end
 
   def self.run_installation_tests
+    install = {}
     print_section_header "Installation Tests"
-    rm_test_results = test_rubymotion_version
-    rm_version =
-      if rm_test_results.data[0].is_bad?
-        :rm_version_unknown
-      else
-        rm_test_results.data[0].value
-      end
-    print_test_result rm_test_results
-    print_test_result test_rbenv_version
-    print_test_result test_frameworks("OSX", "osx")
-    print_test_result test_frameworks("iOS", "ios")
-    print_test_result test_frameworks("tvOS", "tvos")
-    print_test_result test_frameworks("watchOS", "watch")
-    print_test_result test_frameworks("Android", "android")
 
-    print_test_result test_xcode_version(rm_version)
-    print_test_result test_xcode_select_version
-    print_test_result test_xcode_select_path
+    # RubyMotion tests
+    install[:motion] = {}
+    result, install[:motion][:version] = test_rubymotion_version
+    print_test_result result
+
+    install[:motion][:frameworks] = {}
+    result, install[:motion][:frameworks][:osx] = test_frameworks('OSX')
+    print_test_result result
+    result, install[:motion][:frameworks][:ios] = test_frameworks('iOS')
+    print_test_result result
+    result, install[:motion][:frameworks][:tvos] = test_frameworks('tvOS')
+    print_test_result result
+    result, install[:motion][:frameworks][:watch] = test_frameworks('watchOS', 'watch')
+    print_test_result result
+    result, install[:motion][:frameworks][:android] = test_frameworks('Android')
+    print_test_result result
+
+    # rbenv tests
+    install[:rbenv] = {}
+    result, install[:rbenv][:version] = test_rbenv_version
+    print_test_result result
+
+    # Xcode tests
+    install[:xcode] = {}
+    result, install[:xcode][:version] = test_xcode_version(install[:motion][:version])
+    print_test_result result
+    install[:xcode][:select] = {}
+    result, install[:xcode][:select][:version] = test_xcode_select_version
+    print_test_result result
+    result, install[:xcode][:select][:path] = test_xcode_select_path
+    print_test_result result
+
+    install
   end
 
   def self.run
     print_report_header "RubyMotion Doctor"
+
     run_environment_tests
     run_installation_tests
-    # run_project_tests
+
+    #env = run_environment_tests
+    #install = run_installation_tests
+    #pp env
+    #pp install
   end
 end
 
