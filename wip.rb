@@ -3,7 +3,7 @@
 # fswatch ./wip.rb | xargs -n1 -I{} ruby ./wip.rb
 
 require 'open3'
-#require 'pp'
+# require 'pp'
 
 # Represents a set of test data comprising the result of a single test.
 #
@@ -263,6 +263,53 @@ class Wip
     end
 
     return result, version
+  end
+
+  def self.test_rbenv_rb_versions
+    # TODO: do we consider "system" to be relevant? Should we consider
+    # it suspect if "system" is the version reported by `rbenv version`?
+    result = TestResult.new 'rbenv-supplied Ruby versions'
+
+    cmd_name = 'rbenv'
+    cmd = CommandResult.new "#{cmd_name} versions --bare"
+
+    case cmd.status
+    when :success
+      lines = cmd.stdout.split("\n")
+      versions = []
+      lines.each do |version_str|
+        version_split = version_str.split('.')
+        version = {
+          :major => version_split[0].to_i,
+          :minor => version_split[1].to_i,
+          :very_minor => version_split[2].to_i,
+        }
+        versions << version
+        result.add(TestDatum.new version_str, :neutral)
+      end
+      if result.data.count == 0
+        result.add(TestDatum.new 'None', :neutral)
+      end
+    when :not_found
+      # It only makes sense to run this test after a succesful run of test_rbenv_version,
+      # but just in case someone runs it in isolation...
+      result.add(TestDatum.new 'rbenv not found',
+                               :neutral)
+    when :failure
+      # See :not_found case above.
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "#{cmd_name} reports: '#{cmd.stderr}'")
+    when :sys_failure
+      # Likewise.
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "System reports: '#{cmd.syserror.message}'")
+    end
+
+    return result, versions
   end
 
 
@@ -546,6 +593,10 @@ class Wip
     install[:rbenv] = {}
     result, install[:rbenv][:version] = test_rbenv_version
     print_test_result result
+    if install[:rbenv][:version]
+      result, install[:rbenv][:rb_versions] = test_rbenv_rb_versions
+      print_test_result result
+    end
 
     # Xcode tests
     install[:xcode] = {}
@@ -566,10 +617,10 @@ class Wip
     run_environment_tests
     run_installation_tests
 
-    #env = run_environment_tests
-    #install = run_installation_tests
-    #pp env
-    #pp install
+    # env = run_environment_tests
+    # install = run_installation_tests
+    # pp env
+    # pp install
   end
 end
 
