@@ -255,7 +255,7 @@ class Wip
   # version parity.
   def self.test_xcode_version rm_version
 
-    parities = {
+    rm_to_xcode_parities = {
       "5.7"  => "9.2",
       "5.8"  => "9.3",
       "5.9"  => "9.4",
@@ -263,7 +263,7 @@ class Wip
       # We'll assume we want the latest if the RM version test failed
       :rm_version_unknown => "9.4",
     }
-    expected_version = parities[rm_version]
+    expected_version = rm_to_xcode_parities[rm_version]
 
     result_set = TestResultSet.new 'Xcode version'
 
@@ -314,6 +314,51 @@ class Wip
     result_set
   end
 
+  def self.test_xcode_select_version
+    result_set = TestResultSet.new 'xcode-select version'
+
+    cmd_name = 'xcode-select'
+    cmd = CommandResult.new "#{cmd_name} --version"
+
+    # TODO: According to this: https://github.com/amirrajan/rubymotion-applied/issues/58
+    # Xcode 9.2 should be paired with 2349. As far as I can tell from my own system,
+    # that's still the xcode-select version present with 9.4.1 (latest non-beta)
+    #
+    # Since the RM version parities only go as far back as Xcode 9.2, I think
+    # maybe we just unconditionally want 2349 now? I'm also unclear on what
+    # exactly controls the xcode-select version. I'm pretty sure this stands alone from
+    # Xcode, and would be relegated to the OSX version.
+    case cmd.status
+    when :success
+      version = cmd.stdout.chop.sub(/^xcode-select version ([\.\d]+)\.$/, '\1')
+      if version == '2349'
+        result_set.add(
+          TestResult.new version,
+                         :good)
+      else
+        result_set.add(
+          TestResult.new version,
+                         :bad,
+                         'expected 2349')
+      end
+    when :not_found
+      result_set.add(
+        TestResult.new "#{cmd_name} not found",
+                       :bad)
+    when :failure
+      result_set.add(
+        TestResult.new 'Indeterminate',
+                       :bad,
+                       "#{cmd_name} reports: '#{cmd.stderr}'")
+    when :sys_failure
+      result_set.add(
+        TestResult.new 'Failed',
+                       :bad,
+                       "System reports: '#{cmd.syserror.message}'")
+    end
+    result_set
+  end
+
   def self.test_xcode_select_path
     result_set = TestResultSet.new 'xcode-select path'
 
@@ -328,21 +373,31 @@ class Wip
         result_set.add(
           TestResult.new path,
                          :bad,
-                         "path references a CLI-tool-only Xcode installation")
+                         'path indicates a CLI-tool-only Xcode installation')
       when /Xcode\.app/
         result_set.add(
             TestResult.new path)
+      when /Xcode-beta\.app/
+        result_set.add(
+          TestResult.new path,
+                         :maybe,
+                         'path indicates a beta Xcode installation')
       else
+        # TODO: I'm not sure what exactly constitutes a valid
+        # path. `xcode-select -s` won't let you set an invalid path, but that's
+        # not to say that the path might point to an unsuitable version of
+        # Xcode in spite of a passing `xcodebuild -version` result in
+        # 'test_xcode_version'
         result_set.add(
           TestResult.new path,
                          maybe,
-                         "custom path detected")
+                         'custom path detected')
       end
     when :not_found
-      # TODO-MAYBE: I'm not sure this can actually happen, since the
+      # TODO-MAYBE: I'm not sure if this can actually happen, since the
       # xcode-select binary should be present on any OSX system, whether or not
-      # Xcode is installed. But if it can, this is actually a distinct condition
-      # from simply not finding a valid developer directory.
+      # Xcode is installed (I think...). But if it can, this is actually a
+      # distinct condition from simply not finding a valid developer directory.
       result_set.add(
         TestResult.new 'Not found',
                        :bad)
@@ -435,6 +490,7 @@ class Wip
     print_test_results test_frameworks("Android", "android")
 
     print_test_results test_xcode_version(rm_version)
+    print_test_results test_xcode_select_version
     print_test_results test_xcode_select_path
   end
 
