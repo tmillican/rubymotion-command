@@ -4,33 +4,33 @@
 
 require 'open3'
 
-# Represents a set of related test results.
+# Represents a set of test data comprising the result of a single test.
 #
 # Ex: a collection of detected OSX framework versions.
-class TestResultSet
-  # The name of the test set. Used as the label in test reports.
+class TestResult
+  # The name of the test result. Used as the label in test reports.
   attr_accessor :name,
-  # An array of TestResult objects comprising the TestSet
-                :results
+                # An array of TestDatum objects comprising the TestResult
+                :data
 
-  def initialize name='', results=[]
+  def initialize name='', data=[]
     @name = name
-    @results = results
+    @data = data
   end
 
-  def add result
-    @results << result
+  def add datum
+    @data << datum
   end
 end
 
 
 
-# Represents an individual result of a TestSet.
-class TestResult
-  # The value of the test result.
+# Represents a single data point of a TestResult.
+class TestDatum
+  # The value of the test datum.
   attr_accessor :value
 
-  # The status of the test result. May be:
+  # The status of the test datum. May be:
   #
   # * +:good+ - Indicates success or an acceptable value
   # * +:maybe+ - Indicates a possible, but not certain problem
@@ -155,26 +155,26 @@ class Wip
     print "\n"
   end
 
-  # Pretty-prints a TestResultSet object
-  def self.print_test_results result_set
-    result_set.results.each do |result|
-      if result.equal? result_set.results.first
-        print "#{result_set.name.ljust(LABEL_WIDTH)}: "
+  # Pretty-prints a TestResult object
+  def self.print_test_result result
+    result.data.each do |datum|
+      if datum.equal? result.data.first
+        print "#{result.name.ljust(LABEL_WIDTH)}: "
       else
         print(''.ljust(LABEL_WIDTH + 2, ' '))
       end
 
-      case result.status
+      case datum.status
       when :good
-        print "#{ANSI_PRE_GOOD}#{result.value}"
+        print "#{ANSI_PRE_GOOD}#{datum.value}"
       when :maybe
-        print "#{ANSI_PRE_MAYBE}#{result.value}"
-        print " (#{result.meta})" unless result.meta.to_s.empty?
+        print "#{ANSI_PRE_MAYBE}#{datum.value}"
+        print " (#{datum.meta})" unless datum.meta.to_s.empty?
       when :bad
         print "#{ANSI_PRE_BAD}#{result.value}"
-        print " (#{result.meta})" unless result.meta.to_s.empty?
+        print " (#{datum.meta})" unless datum.meta.to_s.empty?
       else
-        print result.value
+        print datum.value
       end
       print "#{ANSI_POST}\n"
     end
@@ -185,10 +185,10 @@ class Wip
   # -----------------------------------------------------------------------------
 
   def self.test_working_directory
-    TestResultSet.new('Working directory',
-                      [
-                        TestResult.new(Dir.pwd, :neutral)
-                      ])
+    TestResult.new('Working directory',
+                   [
+                     TestDatum.new(Dir.pwd, :neutral)
+                   ])
   end
 
   # -----------------------------------------------------------------------------
@@ -198,56 +198,56 @@ class Wip
   def self.test_rubymotion_version
     cmd_name = 'motion'
     cmd = CommandResult.new "#{cmd_name} --version"
-    result_set = TestResultSet.new 'RubyMotion version'
+    result = TestResult.new 'RubyMotion version'
 
     # TODO: are some versions considered deprecated? EOL?
     case cmd.status
     when :success
-      result_set.add(TestResult.new cmd.stdout.chop,
-                                    :good)
+      result.add(TestDatum.new cmd.stdout.chop,
+                               :good)
     when :not_found
-      result_set.add(TestResult.new 'Not found',
-                                    :bad)
+      result.add(TestDatum.new 'Not found',
+                               :bad)
     when :failure
-      result_set.add(TestResult.new 'Failed',
-                                    :bad,
-                                    "#{cmd_name} reports: '#{cmd.stderr}'")
+      result.add(TestDatum.new 'Failed',
+                               :bad,
+                               "#{cmd_name} reports: '#{cmd.stderr}'")
     when :sys_failure
-      result_set.add(TestResult.new 'Failed',
-                                    :bad,
-                                    "System reports: '#{cmd.syserror.message}'")
+      result.add(TestDatum.new 'Failed',
+                               :bad,
+                               "System reports: '#{cmd.syserror.message}'")
     end
-    result_set
+    result
   end
 
   def self.test_rbenv_version
     cmd_name = 'rbenv'
     cmd = CommandResult.new "#{cmd_name} --version"
-    result_set = TestResultSet.new 'rbenv version'
+    result = TestResult.new 'rbenv version'
 
     case cmd.status
     when :success
-      result_set.add(
-        TestResult.new cmd.stdout.split(' ')[1],
-                                    :neutral)
+      result.add(
+        TestDatum.new cmd.stdout.split(' ')[1],
+                      :neutral)
     when :not_found
-      result_set.add(TestResult.new 'Not found',
-                                    :maybe,
-                                    "Recommended, but not required")
+      result.add(TestDatum.new 'Not found',
+                               :maybe,
+                               "Recommended, but not required")
     when :failure
       # Even though rbenv isn't required, it's a problem if it's broken
-      result_set.add(
-        TestResult.new 'Failed',
-                       :bad,
-                       "#{cmd_name} reports: '#{cmd.stderr}'")
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "#{cmd_name} reports: '#{cmd.stderr}'")
     when :sys_failure
       # Likewise.
-      result_set.add(
-        TestResult.new 'Failed',
-                       :bad,
-                       "System reports: '#{cmd.syserror.message}'")
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "System reports: '#{cmd.syserror.message}'")
     end
-    result_set
+    result
   end
 
 
@@ -265,16 +265,16 @@ class Wip
     }
     expected_version = rm_to_xcode_parities[rm_version]
 
-    result_set = TestResultSet.new 'Xcode version'
+    result = TestResult.new 'Xcode version'
 
     # Bail early if xcode-select doesn't give us a valid path. This indicates
     # that Xcode isn't installed at all, and we'll just wind up prompting the
     # user to install Xcode when we try to run `xcodebuild` below.
-    if !test_xcode_select_path.results[0].is_good?
-      result_set.add(
-        TestResult.new 'Not installed',
-                       :bad)
-      return result_set
+    if !test_xcode_select_path.data[0].is_good?
+      result.add(
+        TestDatum.new 'Not installed',
+                      :bad)
+      return result
     end
 
     cmd_name = 'xcodebuild'
@@ -283,39 +283,39 @@ class Wip
     case cmd.status
     when :success
       version = cmd.stdout.split("\n")[0].split(' ')[1]
-      result = TestResult.new version
+      datum = TestDatum.new version
       if version != expected_version
-        result.meta = "expected #{expected_version}"
+        datum.meta = "expected #{expected_version}"
         # What program is complete without gnarly regexps?
         # This (hopefully) detects subversions of the expected version
         version_subregexp = expected_version.gsub(/\./, '\.')
         isminor_regexp = Regexp.new("^#{version_subregexp}(\\.[0-9\\.]+)?$")
         is_minor = version.match(isminor_regexp)
         # Minor versions of expected are *maybe* okay.
-        result.status = is_minor ? :maybe : :bad
+        datum.status = is_minor ? :maybe : :bad
       end
-      result_set.add result
+      result.add datum
     when :not_found
-      result_set.add(
-        TestResult.new 'Not installed',
-                       :bad,
-                       "#{expected_version} required")
+      result.add(
+        TestDatum.new 'Not installed',
+                      :bad,
+                      "#{expected_version} required")
     when :failure
-      result_set.add(
-        TestResult.new 'Failed',
-                       :bad,
-                       "#{cmd_name} reports: '#{cmd.stderr}'")
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "#{cmd_name} reports: '#{cmd.stderr}'")
     when :sys_failure
-      result_set.add(
-        TestResult.new 'Failed',
-                       :bad,
-                       "System reports: '#{cmd.syserror.message}'")
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "System reports: '#{cmd.syserror.message}'")
     end
-    result_set
+    result
   end
 
   def self.test_xcode_select_version
-    result_set = TestResultSet.new 'xcode-select version'
+    result = TestResult.new 'xcode-select version'
 
     cmd_name = 'xcode-select'
     cmd = CommandResult.new "#{cmd_name} --version"
@@ -332,35 +332,35 @@ class Wip
     when :success
       version = cmd.stdout.chop.sub(/^xcode-select version ([\.\d]+)\.$/, '\1')
       if version == '2349'
-        result_set.add(
-          TestResult.new version,
-                         :good)
+        result.add(
+          TestDatum.new version,
+                        :good)
       else
-        result_set.add(
-          TestResult.new version,
-                         :bad,
-                         'expected 2349')
+        result.add(
+          TestDatum.new version,
+                        :bad,
+                        'expected 2349')
       end
     when :not_found
-      result_set.add(
-        TestResult.new "#{cmd_name} not found",
-                       :bad)
+      result.add(
+        TestDatum.new "#{cmd_name} not found",
+                      :bad)
     when :failure
-      result_set.add(
-        TestResult.new 'Indeterminate',
-                       :bad,
-                       "#{cmd_name} reports: '#{cmd.stderr}'")
+      result.add(
+        TestDatum.new 'Indeterminate',
+                      :bad,
+                      "#{cmd_name} reports: '#{cmd.stderr}'")
     when :sys_failure
-      result_set.add(
-        TestResult.new 'Failed',
-                       :bad,
-                       "System reports: '#{cmd.syserror.message}'")
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "System reports: '#{cmd.syserror.message}'")
     end
-    result_set
+    result
   end
 
   def self.test_xcode_select_path
-    result_set = TestResultSet.new 'xcode-select path'
+    result = TestResult.new 'xcode-select path'
 
     cmd_name = 'xcode-select'
     cmd = CommandResult.new "#{cmd_name} --print-path"
@@ -370,97 +370,97 @@ class Wip
       path = cmd.stdout.chop
       case path
       when /CommandLineTools/
-        result_set.add(
-          TestResult.new path,
-                         :bad,
-                         'path indicates a CLI-tool-only Xcode installation')
+        result.add(
+          TestDatum.new path,
+                        :bad,
+                        'path indicates a CLI-tool-only Xcode installation')
       when /Xcode\.app/
-        result_set.add(
-            TestResult.new path)
+        result.add(
+          TestDatum.new path)
       when /Xcode-beta\.app/
-        result_set.add(
-          TestResult.new path,
-                         :maybe,
-                         'path indicates a beta Xcode installation')
+        result.add(
+          TestDatum.new path,
+                        :maybe,
+                        'path indicates a beta Xcode installation')
       else
         # TODO: I'm not sure what exactly constitutes a valid
         # path. `xcode-select -s` won't let you set an invalid path, but that's
         # not to say that the path might point to an unsuitable version of
         # Xcode in spite of a passing `xcodebuild -version` result in
         # 'test_xcode_version'
-        result_set.add(
-          TestResult.new path,
-                         maybe,
-                         'custom path detected')
+        result.add(
+          TestDatum.new path,
+                        maybe,
+                        'custom path detected')
       end
     when :not_found
       # TODO-MAYBE: I'm not sure if this can actually happen, since the
       # xcode-select binary should be present on any OSX system, whether or not
       # Xcode is installed (I think...). But if it can, this is actually a
       # distinct condition from simply not finding a valid developer directory.
-      result_set.add(
-        TestResult.new 'Not found',
-                       :bad)
+      result.add(
+        TestDatum.new 'Not found',
+                      :bad)
     when :failure
       if cmd.stderr.match(/unable to get active developer directory/)
-        result_set.add(
-          TestResult.new 'Not found',
-                         :bad)
+        result.add(
+          TestDatum.new 'Not found',
+                        :bad)
       else
-        result_set.add(
-            TestResult.new 'Indeterminate',
+        result.add(
+          TestDatum.new 'Indeterminate',
                         :bad,
                         "#{cmd_name} reports: '#{cmd.stderr}'")
       end
     when :sys_failure
-      result_set.add(
-        TestResult.new 'Failed',
-                       :bad,
-                       "System reports: '#{cmd.syserror.message}'")
+      result.add(
+        TestDatum.new 'Failed',
+                      :bad,
+                      "System reports: '#{cmd.syserror.message}'")
     end
-    result_set
+    result
   end
 
   def self.test_frameworks framework_name, framework_subdir
     # TODO: Are any of the frameworks considered mandatory?
 
-    result_set = TestResultSet.new "Supported #{framework_name} frameworks"
+    result = TestResult.new "Supported #{framework_name} frameworks"
     rm_data_path = '/Library/RubyMotion/data'
     framework_path = "#{rm_data_path}/#{framework_subdir}"
 
     if !File.directory? rm_data_path
-      result_set.add(
-        TestResult.new 'RubyMotion data directory not found',
-                       :bad,
-                       rm_data_path)
-      return result_set
+      result.add(
+        TestDatum.new 'RubyMotion data directory not found',
+                      :bad,
+                      rm_data_path)
+      return result
     end
 
     if !File.exists? framework_path
-      result_set.add(TestResult.new 'None', :neutral)
-      return result_set
+      result.add(TestDatum.new 'None', :neutral)
+      return result
     end
 
     if !File.directory? framework_path
-      result_set.add(
-        TestResult.new 'Indeterminate',
-                       :bad,
-                       "#{framework_path} is a file -- expected directory")
-      return result_set
+      result.add(
+        TestDatum.new 'Indeterminate',
+                      :bad,
+                      "#{framework_path} is a file -- expected directory")
+      return result
     end
 
     Dir.entries(framework_path).each do |entry|
       if File.directory? "#{framework_path}/#{entry}" and
         entry.match('^\d+(\.\d+)*$')
 
-        result_set.add(TestResult.new entry, :neutral)
+        result.add(TestDatum.new entry, :neutral)
       end
     end
-    if result_set.results.count == 0
-      result_set.add(TestResult.new 'None', :neutral)
+    if result.data.count == 0
+      result.add(TestDatum.new 'None', :neutral)
     end
 
-    result_set
+    result
   end
 
   # -----------------------------------------------------------------------------
@@ -469,29 +469,29 @@ class Wip
 
   def self.run_environment_tests
     print_section_header "Environment"
-    print_test_results test_working_directory
+    print_test_result test_working_directory
   end
 
   def self.run_installation_tests
     print_section_header "Installation Tests"
     rm_test_results = test_rubymotion_version
     rm_version =
-      if rm_test_results.results[0].is_bad?
+      if rm_test_results.data[0].is_bad?
         :rm_version_unknown
       else
-        rm_test_results.results[0].value
+        rm_test_results.data[0].value
       end
-    print_test_results rm_test_results
-    print_test_results test_rbenv_version
-    print_test_results test_frameworks("OSX", "osx")
-    print_test_results test_frameworks("iOS", "ios")
-    print_test_results test_frameworks("tvOS", "tvos")
-    print_test_results test_frameworks("watchOS", "watch")
-    print_test_results test_frameworks("Android", "android")
+    print_test_result rm_test_results
+    print_test_result test_rbenv_version
+    print_test_result test_frameworks("OSX", "osx")
+    print_test_result test_frameworks("iOS", "ios")
+    print_test_result test_frameworks("tvOS", "tvos")
+    print_test_result test_frameworks("watchOS", "watch")
+    print_test_result test_frameworks("Android", "android")
 
-    print_test_results test_xcode_version(rm_version)
-    print_test_results test_xcode_select_version
-    print_test_results test_xcode_select_path
+    print_test_result test_xcode_version(rm_version)
+    print_test_result test_xcode_select_version
+    print_test_result test_xcode_select_path
   end
 
   def self.run
