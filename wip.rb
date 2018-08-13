@@ -379,7 +379,7 @@ class Wip
   end
 
   def self.test_xcode_select_version xcode_select
-    return nil unless xcode_select
+    return nil unless xcode_select[:state] == :present
 
     # TODO:
     # According to https://github.com/amirrajan/rubymotion-applied/issues/58
@@ -398,12 +398,90 @@ class Wip
     result
   end
 
-  # Unrefactored tests :(
-  # ---------------------
+  # Determines the active developer directory. I.e. `xcode-select --print-path`
+  def self.get_xcode_path xcode_select_state
+    # Don't bother trying this unless we know `xcode-select` itself works.
+    return nil unless xcode_select_state == :present
 
-  # Determines the Xcode version. Checks against the RubyMotion version for
-  # version parity.
-  def self.test_xcode_version rm_version
+    (CommandResult.new 'xcode-select --print-path').stdout.chop
+  end
+
+  def self.test_xcode_path path
+    result = TestResult.new 'Xcode path'
+    case path
+    when /CommandLineTools/
+      result.add(
+        TestDatum.new(
+          path,
+          :bad,
+          'path indicates a CLI-tool-only Xcode installation'))
+    when /Xcode\.app/
+      result.add(TestDatum.new path)
+    when /Xcode-beta\.app/
+      result.add(
+        TestDatum.new(
+          path,
+          :maybe,
+          'path indicates a beta Xcode installation'))
+    else
+      # TODO: I'm not sure what exactly constitutes a valid
+      # path. `xcode-select -s` won't let you set an invalid path, but that's
+      # not to say that the path might point to an unsuitable version of
+      # Xcode in spite of a passing `xcodebuild -version` result in
+      # 'test_xcode_version'
+      result.add(
+        TestDatum.new(
+          path,
+          :maybe,
+          'custom path detected'))
+    end
+    result
+  end
+
+  def self.sense_xcode xcode_path
+    # Bail early if xcode-select doesn't give us a valid path. This indicates
+    # that Xcode isn't installed at all. Running `xcodebuild` in this case
+    # won't work, and will only prompt the user to install Xcode in a modal
+    # dialog.
+    return { :state => :absent } unless xcode_path
+
+    cmd = CommandResult.new 'xcodebuild -version'
+    case cmd.status
+    when :success
+      version_split = cmd.stdout.split("\n")[0].split(' ')[1].split('.')
+      {
+        :state => :present,
+        :version => {
+          :major => version_split[0].to_i,
+          :minor => version_split[1].to_i,
+          :very_minor => version_split[2].to_i,
+        }
+      }
+    when :not_found
+      { :state => :absent }
+    when :failure
+      { :state => :failed,
+        :fail_source => 'xcodebuild',
+        :err => cmd.stderr, }
+    when :sys_failure
+      { :state => :failed,
+        :fail_source => 'system',
+        :err => cmd.syserror.message, }
+    end
+  end
+
+  # Checks against the RubyMotion version for version parity.
+  def self.test_xcode_version xcode, rm_version
+    result = TestResult.new 'Xcode version'
+
+    if xcode[:state] != :present
+    then
+      result.add(
+        TestDatum.new(
+          'Not installed',
+          :bad))
+      return result
+    end
 
     rm_5_7 = { :major => 5, :minor => 7 }
     rm_5_8 = { :major => 5, :minor => 8 }
@@ -423,182 +501,76 @@ class Wip
     expected_version = rm_to_xcode_parities[rm_version]
     expected_version ||= xc_9_4
 
-    result = TestResult.new 'Xcode version'
-
-    # Bail early if xcode-select doesn't give us a valid path. This indicates
-    # that Xcode isn't installed at all, and we'll just wind up prompting the
-    # user to install Xcode when we try to run `xcodebuild` below.
-    if test_xcode_select_path[1].nil?
-      result.add(
-        TestDatum.new 'Not installed',
-                      :bad)
-      return result, nil
+    datum = TestDatum.new(
+      "#{xcode[:version][:major]}." \
+      "#{xcode[:version][:minor]}." \
+      "#{xcode[:version][:very_minor]}")
+    if xcode[:version] != expected_version
+      datum.meta = "expected #{expected_version[:major]}" \
+                   ".#{expected_version[:minor]}" \
+                   ".#{expected_version[:very_minor]}"
+      datum.status =
+        # Having a very minor version above the expected is *maybe* okay.
+        # TODO: This might be perfectly fine. Ask Amir. 9.4.1 is current, so
+        # this is going to flag for a decent number of people.
+        if xcode[:version][:major] = expected_version[:major] and
+          xcode[:version][:minor] = expected_version[:minor] and
+          xcode[:version][:very_minor] > expected_version[:very_minor]
+          :maybe
+        else
+          :bad
+        end
     end
-
-    cmd_name = 'xcodebuild'
-    cmd = CommandResult.new "#{cmd_name} -version"
-
-    case cmd.status
-    when :success
-      version_str = cmd.stdout.split("\n")[0].split(' ')[1]
-      version_split = version_str.split('.')
-      version = {
-        :major => version_split[0].to_i,
-        :minor => version_split[1].to_i,
-        :very_minor => version_split[2].to_i
-      }
-      datum = TestDatum.new version_str
-      if version != expected_version
-        datum.meta = "expected #{expected_version[:major]}" \
-                     ".#{expected_version[:minor]}" \
-                     ".#{expected_version[:very_minor]}"
-        datum.status =
-          # Having a very minor version above the expected is *maybe* okay.
-          # TODO: This might be perfectly fine. Ask Amir. 9.4.1 is current, so
-          # this is going to flag for a decent number of people.
-          if version[:major] = expected_version[:major] and
-            version[:minor] = expected_version[:minor] and
-            version[:very_minor] > expected_version[:very_minor]
-            :maybe
-          else
-            :bad
-          end
-      end
-      result.add datum
-    when :not_found
-      result.add(
-        TestDatum.new 'Not installed',
-                      :bad,
-                      "#{expected_version} required")
-    when :failure
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "#{cmd_name} reports: '#{cmd.stderr}'")
-    when :sys_failure
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "System reports: '#{cmd.syserror.message}'")
-    end
-    return result, version
+    result.add datum
+    result
   end
 
-  def self.test_xcode_select_path
-    result = TestResult.new 'xcode-select path'
-
-    cmd_name = 'xcode-select'
-    cmd = CommandResult.new "#{cmd_name} --print-path"
-
-    case cmd.status
-    when :success
-      path = cmd.stdout.chop
-      case path
-      when /CommandLineTools/
-        result.add(
-          TestDatum.new path,
-                        :bad,
-                        'path indicates a CLI-tool-only Xcode installation')
-      when /Xcode\.app/
-        result.add(
-          TestDatum.new path)
-      when /Xcode-beta\.app/
-        result.add(
-          TestDatum.new path,
-                        :maybe,
-                        'path indicates a beta Xcode installation')
-      else
-        # TODO: I'm not sure what exactly constitutes a valid
-        # path. `xcode-select -s` won't let you set an invalid path, but that's
-        # not to say that the path might point to an unsuitable version of
-        # Xcode in spite of a passing `xcodebuild -version` result in
-        # 'test_xcode_version'
-        result.add(
-          TestDatum.new path,
-                        maybe,
-                        'custom path detected')
-      end
-    when :not_found
-      # TODO-MAYBE: I'm not sure if this can actually happen, since the
-      # xcode-select binary should be present on any OSX system, whether or not
-      # Xcode is installed (I think...). But if it can, this is actually a
-      # distinct condition from simply not finding a valid developer directory.
-      result.add(
-        TestDatum.new 'Not found',
-                      :bad)
-    when :failure
-      if cmd.stderr.match(/unable to get active developer directory/)
-        result.add(
-          TestDatum.new 'Not found',
-                        :bad)
-      else
-        result.add(
-          TestDatum.new 'Indeterminate',
-                        :bad,
-                        "#{cmd_name} reports: '#{cmd.stderr}'")
-      end
-    when :sys_failure
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "System reports: '#{cmd.syserror.message}'")
-    end
-    return result, path
-  end
-
-  def self.test_frameworks framework_name,
-                           framework_subdir=framework_name.downcase
-
-    # TODO: Are any of the frameworks considered mandatory?
-    result = TestResult.new "Supported #{framework_name} frameworks"
+  def self.get_motion_sdks framework_name,
+                          framework_subdir=framework_name.downcase
     rm_data_path = '/Library/RubyMotion/data'
     framework_path = "#{rm_data_path}/#{framework_subdir}"
 
-    if !File.directory? rm_data_path
-      result.add(
-        TestDatum.new 'RubyMotion data directory not found',
-                      :bad,
-                      rm_data_path)
-      return result, nil
-    end
+    return [] unless File.directory? framework_path
 
-    if !File.exists? framework_path
-      result.add(TestDatum.new 'None', :neutral)
-      return result, nil
-    end
-
-    if !File.directory? framework_path
-      result.add(
-        TestDatum.new 'Indeterminate',
-                      :bad,
-                      "#{framework_path} is a file -- expected directory")
-      return result, nil
-    end
-
-    frameworks = []
+    sdks = []
     Dir.entries(framework_path).each do |entry|
       if File.directory? "#{framework_path}/#{entry}" and
         entry.match('^\d+(\.\d+)*$')
-        result.add(TestDatum.new entry, :neutral)
+
         entry_split = entry.split('.')
-        framework_version = {
+        sdk_version = {
           :major => entry_split[0].to_i,
           :minor => entry_split[1].to_i,
-          :very_minor => entry_split[2].to_i
+          :very_minor => entry_split[2].to_i,
         }
-        frameworks << framework_version
+        sdks << sdk_version
       end
+    end
+    sdks
+  end
+
+  def self.test_motion_sdks sdks,
+                           framework_name
+    # TODO: Are any of the frameworks considered mandatory?
+    result = TestResult.new "Supported #{framework_name} frameworks"
+    sdks.each do |sdk|
+      result.add(
+        TestDatum.new(
+          "#{sdk[:major]}.#{sdk[:minor]}.#{sdk[:very_minor]}",
+          :neutral))
     end
     if result.data.count == 0
       result.add(TestDatum.new 'None', :neutral)
     end
-
-    return result, frameworks
+    result
   end
 
   # -----------------------------------------------------------------------------
-  # Run{Foo}
+  # Get{Foo}/Test{Foo}
   # -----------------------------------------------------------------------------
+
+  # Environment
+  # -----------
 
   def self.get_environment_data
     {
@@ -606,13 +578,24 @@ class Wip
     }
   end
 
-  def self.run_environment_tests env
+  def self.test_environment_data env
     print_section_header "Environment"
     print_test_result test_working_directory env[:wd]
   end
 
+  # Installation
+  # ------------
+
   def self.get_rubymotion_data
-    sense_rubymotion
+    motion = sense_rubymotion
+    motion[:sdks] = {
+      :osx => get_motion_sdks('OSX'),
+      :ios => get_motion_sdks('iOS'),
+      :tvos => get_motion_sdks('tvOS'),
+      :watch => get_motion_sdks('watchOS', 'watch'),
+      :android => get_motion_sdks('Android'),
+    }
+    motion
   end
 
   def self.get_rbenv_data
@@ -622,9 +605,12 @@ class Wip
   end
 
   def self.get_xcode_data
-    {
-      :xcode_select => sense_xcode_select,
-    }
+    select = sense_xcode_select
+    path = get_xcode_path(select[:state])
+    xcode = sense_xcode path
+    xcode[:xcode_select] = select
+    xcode[:path] = path
+    xcode
   end
 
   def self.get_installation_data
@@ -635,34 +621,38 @@ class Wip
     }
   end
 
-  def self.run_installation_tests install
+  def self.test_installation_data install
     print_section_header "Installation Tests"
 
     # RubyMotion tests
     print_test_result test_rubymotion_version(install[:motion])
 
-    install[:motion][:frameworks] = {}
-    result, install[:motion][:frameworks][:osx] = test_frameworks('OSX')
-    print_test_result result
-    result, install[:motion][:frameworks][:ios] = test_frameworks('iOS')
-    print_test_result result
-    result, install[:motion][:frameworks][:tvos] = test_frameworks('tvOS')
-    print_test_result result
-    result, install[:motion][:frameworks][:watch] = test_frameworks('watchOS', 'watch')
-    print_test_result result
-    result, install[:motion][:frameworks][:android] = test_frameworks('Android')
-    print_test_result result
+    print_test_result test_motion_sdks(
+                        install[:motion][:sdks][:osx],
+                        'OSX')
+    print_test_result test_motion_sdks(
+                        install[:motion][:sdks][:ios],
+                        'iOS')
+    print_test_result test_motion_sdks(
+                        install[:motion][:sdks][:tvos],
+                        'tvOS')
+    print_test_result test_motion_sdks(
+                        install[:motion][:sdks][:watch],
+                        'watchOS')
+    print_test_result test_motion_sdks(
+                        install[:motion][:sdks][:android],
+                        'Android')
 
     # rbenv tests
     print_test_result test_rbenv_version(install[:rbenv])
     print_test_result test_rbenv_ruby_versions(install[:rbenv][:ruby_versions])
 
     # Xcode tests
-    result, install[:xcode][:version] = test_xcode_version(install[:motion][:version])
-    print_test_result result
+    print_test_result test_xcode_version(
+                        install[:xcode],
+                        install[:motion][:version])
     print_test_result test_xcode_select_version install[:xcode][:xcode_select]
-    result, install[:xcode][:xcode_select][:path] = test_xcode_select_path
-    print_test_result result
+    print_test_result test_xcode_path install[:xcode][:path]
 
     install
   end
@@ -672,8 +662,9 @@ class Wip
 
     env = get_environment_data
     install = get_installation_data
-    run_environment_tests env
-    run_installation_tests install
+
+    test_environment_data env
+    test_installation_data install
 
     pp env
     pp install
