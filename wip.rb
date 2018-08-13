@@ -3,7 +3,7 @@
 # fswatch ./wip.rb | xargs -n1 -I{} ruby ./wip.rb
 
 require 'open3'
-# require 'pp'
+require 'pp'
 
 # Represents a set of test data comprising the result of a single test.
 #
@@ -182,136 +182,224 @@ class Wip
   end
 
   # -----------------------------------------------------------------------------
-  # Environment Tests
+  # Environment
   # -----------------------------------------------------------------------------
 
-  def self.test_working_directory
-    return TestResult.new('Working directory',
-                   [ TestDatum.new(Dir.pwd, :neutral) ]),
-           Dir.pwd
+  def self.get_working_directory
+    Dir.pwd
+  end
+
+  def self.test_working_directory wd
+    TestResult.new(
+      'Working directory',
+      [TestDatum.new(wd)])
   end
 
   # -----------------------------------------------------------------------------
-  # Installation Tests
+  # Installation
   # -----------------------------------------------------------------------------
 
-  def self.test_rubymotion_version
-    result = TestResult.new 'RubyMotion version'
+  # RubyMotion
+  # ----------
 
-    cmd_name = 'motion'
-    cmd = CommandResult.new "#{cmd_name} --version"
-
-    # TODO: are some versions considered deprecated? EOL?
+  def self.sense_rubymotion
+    cmd = CommandResult.new 'motion --version'
     case cmd.status
     when :success
-      version_str = cmd.stdout.chop
-      result.add(TestDatum.new version_str,
-                               :good)
-      version = {
-        :major => version_str.sub(/^(\d+).\d+$/, '\1').to_i,
-        :minor => version_str.sub(/^\d+.(\d+)$/, '\1').to_i,
+      {
+        :state => :present,
+        :version => {
+          :major => cmd.stdout.chop.sub(/^(\d+).\d+$/, '\1').to_i,
+          :minor => cmd.stdout.chop.sub(/^\d+.(\d+)$/, '\1').to_i,
+        }
       }
     when :not_found
-      result.add(TestDatum.new 'Not found',
-                               :bad)
+      {
+        :state => :absent,
+      }
     when :failure
-      result.add(TestDatum.new 'Failed',
-                               :bad,
-                               "#{cmd_name} reports: '#{cmd.stderr}'")
+      {
+        :state => :failed,
+        :fail_source => 'motion',
+        :err => cmd.stderr,
+      }
     when :sys_failure
-      result.add(TestDatum.new 'Failed',
-                               :bad,
-                               "System reports: '#{cmd.syserror.message}'")
+      {
+        :state => :failed,
+        :fail_source => 'system',
+        :err => cmd.syserror.message,
+      }
     end
-    return result, version
   end
 
-  def self.test_rbenv_version
-    result = TestResult.new 'rbenv version'
+  def self.test_rubymotion_version motion
+    # TODO: are some versions considered deprecated? EOL?
+    result = TestResult.new 'RubyMotion version'
+    case motion[:state]
+    when :present
+      result.add TestDatum.new("#{motion[:version][:major]}" \
+                               ".#{motion[:version][:minor]}")
+    when :absent
+      result.add TestDatum.new(
+                   'Not found',
+                   :bad)
+    when :failed
+      result.add TestDatum.new(
+                   'Failed',
+                   :bad,
+                   "#{motion[:fail_source]} reports: '#{motion[:error]}'")
+    end
+    result
+  end
 
-    cmd_name = 'rbenv'
-    cmd = CommandResult.new "#{cmd_name} --version"
+  # rbenv
+  # -----
 
+  def self.sense_rbenv
+    cmd = CommandResult.new 'rbenv --version'
     case cmd.status
     when :success
-      version_str = cmd.stdout.split(' ')[1]
+      version_split = cmd.stdout.split(' ')[1].split('.')
+      {
+        :state => :present,
+        :version => {
+          :major => version_split[0],
+          :minor => version_split[1],
+          :very_minor => version_split[2],
+        }
+      }
+    when :not_found
+      {
+        :state => :absent,
+      }
+    when :failure
+      {
+        :state => :failed,
+        :fail_source => :cmd,
+        :err => cmd.stderr,
+      }
+    when :sys_failure
+      {
+        :state => :failed,
+        :fail_source => :system,
+        :err => cmd.syserror.message,
+      }
+    end
+  end
+
+  def self.test_rbenv_version rbenv
+    result = TestResult.new 'rbenv version'
+    case rbenv[:state]
+    when :present
+      result.add(
+        TestDatum.new "#{rbenv[:version][:major]}" \
+                      ".#{rbenv[:version][:minor]}" \
+                      ".#{rbenv[:version][:very_minor]}",
+                      :neutral)
+    when :absent
+      result.add(
+        TestDatum.new 'Not found',
+                      :maybe,
+                      'Recommended, but not required')
+    when :failed
+      # Even though rbenv isn't required, it's a problem if it's broken
+      result.add TestDatum.new(
+                   'Not found',
+                   :bad,
+                   "#{rbenv[:fail_source]} reports: '#{rbenv[:error]}'")
+    end
+    result
+  end
+
+  # rbenv ruby versions
+  # -------------------
+
+  def self.get_rbenv_ruby_versions rbenv
+    return nil unless rbenv[:state] == :present
+
+    # TODO: do we consider "system" to be relevant? `rbenv versions --bare`
+    # omits it, since it isn't supplied by rbenv
+    cmd = CommandResult.new 'rbenv versions --bare'
+    lines = cmd.stdout.split("\n")
+    versions = []
+    lines.each do |version_str|
       version_split = version_str.split('.')
       version = {
-        :major => version_split[0],
-        :minor => version_split[1],
-        :very_minor => version_split[2],
+        :major => version_split[0].to_i,
+        :minor => version_split[1].to_i,
+        :very_minor => version_split[2].to_i,
       }
-      result.add(
-        TestDatum.new version_str,
-                      :neutral)
-    when :not_found
-      result.add(TestDatum.new 'Not found',
-                               :maybe,
-                               "Recommended, but not required")
-    when :failure
-      # Even though rbenv isn't required, it's a problem if it's broken
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "#{cmd_name} reports: '#{cmd.stderr}'")
-    when :sys_failure
-      # Likewise.
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "System reports: '#{cmd.syserror.message}'")
+      versions << version
     end
-
-    return result, version
+    versions
   end
 
-  def self.test_rbenv_rb_versions
-    # TODO: do we consider "system" to be relevant? Should we consider
-    # it suspect if "system" is the version reported by `rbenv version`?
+  def self.test_rbenv_ruby_versions versions
     result = TestResult.new 'rbenv-supplied Ruby versions'
+    if versions.nil?
+      result.add(
+        TestDatum.new(
+          'None',
+          :neutral))
+    else
+      versions.each do |version|
+      result.add(
+        TestDatum.new(
+          "#{version[:major]}.#{version[:minor]}.#{version[:very_minor]}",
+          :neutral))
+      end
+    end
+    result
+  end
 
-    cmd_name = 'rbenv'
-    cmd = CommandResult.new "#{cmd_name} versions --bare"
+  # xcode-select
+  # ------------
 
+  def self.sense_xcode_select
+    cmd = CommandResult.new 'xcode-select --version'
     case cmd.status
     when :success
-      lines = cmd.stdout.split("\n")
-      versions = []
-      lines.each do |version_str|
-        version_split = version_str.split('.')
-        version = {
-          :major => version_split[0].to_i,
-          :minor => version_split[1].to_i,
-          :very_minor => version_split[2].to_i,
-        }
-        versions << version
-        result.add(TestDatum.new version_str, :neutral)
-      end
-      if result.data.count == 0
-        result.add(TestDatum.new 'None', :neutral)
-      end
+      {
+        :state => :present,
+        :version => cmd.stdout.chop.sub(
+          /^xcode-select version ([\.\d]+)\.$/,
+          '\1').to_i
+      }
     when :not_found
-      # It only makes sense to run this test after a succesful run of test_rbenv_version,
-      # but just in case someone runs it in isolation...
-      result.add(TestDatum.new 'rbenv not found',
-                               :neutral)
+      { :state => :absent }
     when :failure
-      # See :not_found case above.
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "#{cmd_name} reports: '#{cmd.stderr}'")
+      { :state => :failed,
+        :fail_source => 'xcode-select',
+        :err => cmd.stderr }
     when :sys_failure
-      # Likewise.
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "System reports: '#{cmd.syserror.message}'")
+      { :state => :failed,
+        :fail_source => 'system',
+        :err => cmd.syserror.message }
     end
-
-    return result, versions
   end
 
+  def self.test_xcode_select_version xcode_select
+    return nil unless xcode_select
+
+    # TODO:
+    # According to https://github.com/amirrajan/rubymotion-applied/issues/58
+    # Xcode 9.2 should be paired with 2349. As far as I can tell from my own system,
+    # that's still the xcode-select version present as late as 9.4.1 (latest non-beta)
+    #
+    # Since the RM version parities only go as far back as Xcode 9.2, which also
+    # requires 2349, I think maybe we just unconditionally want 2349 now? I'm
+    # also not entirely clear on what exactly controls the xcode-select
+    # version. I'm pretty sure this stands alone from Xcode, and would be
+    # relegated to the OSX version.
+    result = TestResult.new(
+      'xcode-select version',
+      [ TestDatum.new(xcode_select[:version]) ])
+    result.data[0].status = :bad unless xcode_select[:version] == 2349
+    result
+  end
+
+  # Unrefactored tests :(
+  # ---------------------
 
   # Determines the Xcode version. Checks against the RubyMotion version for
   # version parity.
@@ -385,52 +473,6 @@ class Wip
     when :failure
       result.add(
         TestDatum.new 'Failed',
-                      :bad,
-                      "#{cmd_name} reports: '#{cmd.stderr}'")
-    when :sys_failure
-      result.add(
-        TestDatum.new 'Failed',
-                      :bad,
-                      "System reports: '#{cmd.syserror.message}'")
-    end
-    return result, version
-  end
-
-  def self.test_xcode_select_version
-    result = TestResult.new 'xcode-select version'
-
-    cmd_name = 'xcode-select'
-    cmd = CommandResult.new "#{cmd_name} --version"
-
-    # TODO: According to this: https://github.com/amirrajan/rubymotion-applied/issues/58
-    # Xcode 9.2 should be paired with 2349. As far as I can tell from my own system,
-    # that's still the xcode-select version present with 9.4.1 (latest non-beta)
-    #
-    # Since the RM version parities only go as far back as Xcode 9.2, I think
-    # maybe we just unconditionally want 2349 now? I'm also unclear on what
-    # exactly controls the xcode-select version. I'm pretty sure this stands alone from
-    # Xcode, and would be relegated to the OSX version.
-    case cmd.status
-    when :success
-      version_str = cmd.stdout.chop.sub(/^xcode-select version ([\.\d]+)\.$/, '\1')
-      version = version_str.to_i
-      if version == 2349
-        result.add(
-          TestDatum.new version_str,
-                        :good)
-      else
-        result.add(
-          TestDatum.new version,
-                        :bad,
-                        'expected 2349')
-      end
-    when :not_found
-      result.add(
-        TestDatum.new "#{cmd_name} not found",
-                      :bad)
-    when :failure
-      result.add(
-        TestDatum.new 'Indeterminate',
                       :bad,
                       "#{cmd_name} reports: '#{cmd.stderr}'")
     when :sys_failure
@@ -558,24 +600,46 @@ class Wip
   # Run{Foo}
   # -----------------------------------------------------------------------------
 
-  def self.run_environment_tests
-    environment = {}
-    print_section_header "Environment"
-
-    result, environment[:wd] = test_working_directory
-    print_test_result result
-
-    environment
+  def self.get_environment_data
+    {
+      :wd => get_working_directory
+    }
   end
 
-  def self.run_installation_tests
-    install = {}
+  def self.run_environment_tests env
+    print_section_header "Environment"
+    print_test_result test_working_directory env[:wd]
+  end
+
+  def self.get_rubymotion_data
+    sense_rubymotion
+  end
+
+  def self.get_rbenv_data
+    rbenv = sense_rbenv
+    rbenv[:ruby_versions] = get_rbenv_ruby_versions(rbenv)
+    rbenv
+  end
+
+  def self.get_xcode_data
+    {
+      :xcode_select => sense_xcode_select,
+    }
+  end
+
+  def self.get_installation_data
+    {
+      :motion => get_rubymotion_data,
+      :rbenv => get_rbenv_data,
+      :xcode => get_xcode_data,
+    }
+  end
+
+  def self.run_installation_tests install
     print_section_header "Installation Tests"
 
     # RubyMotion tests
-    install[:motion] = {}
-    result, install[:motion][:version] = test_rubymotion_version
-    print_test_result result
+    print_test_result test_rubymotion_version(install[:motion])
 
     install[:motion][:frameworks] = {}
     result, install[:motion][:frameworks][:osx] = test_frameworks('OSX')
@@ -590,22 +654,14 @@ class Wip
     print_test_result result
 
     # rbenv tests
-    install[:rbenv] = {}
-    result, install[:rbenv][:version] = test_rbenv_version
-    print_test_result result
-    if install[:rbenv][:version]
-      result, install[:rbenv][:rb_versions] = test_rbenv_rb_versions
-      print_test_result result
-    end
+    print_test_result test_rbenv_version(install[:rbenv])
+    print_test_result test_rbenv_ruby_versions(install[:rbenv][:ruby_versions])
 
     # Xcode tests
-    install[:xcode] = {}
     result, install[:xcode][:version] = test_xcode_version(install[:motion][:version])
     print_test_result result
-    install[:xcode][:select] = {}
-    result, install[:xcode][:select][:version] = test_xcode_select_version
-    print_test_result result
-    result, install[:xcode][:select][:path] = test_xcode_select_path
+    print_test_result test_xcode_select_version install[:xcode][:xcode_select]
+    result, install[:xcode][:xcode_select][:path] = test_xcode_select_path
     print_test_result result
 
     install
@@ -614,13 +670,13 @@ class Wip
   def self.run
     print_report_header "RubyMotion Doctor"
 
-    run_environment_tests
-    run_installation_tests
+    env = get_environment_data
+    install = get_installation_data
+    run_environment_tests env
+    run_installation_tests install
 
-    # env = run_environment_tests
-    # install = run_installation_tests
-    # pp env
-    # pp install
+    pp env
+    pp install
   end
 end
 
