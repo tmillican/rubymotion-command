@@ -119,9 +119,9 @@ end
 
 
 class Wip
-  # -----------------------------------------------------------------------------
+  # =============================================================================
   # Output
-  # -----------------------------------------------------------------------------
+  # =============================================================================
 
   # TODO: proper termcap-fu
 
@@ -181,9 +181,9 @@ class Wip
     end
   end
 
-  # -----------------------------------------------------------------------------
+  # =============================================================================
   # Environment
-  # -----------------------------------------------------------------------------
+  # =============================================================================
 
   def self.get_working_directory
     Dir.pwd
@@ -195,13 +195,23 @@ class Wip
       [TestDatum.new(wd)])
   end
 
-  # -----------------------------------------------------------------------------
-  # Installation
-  # -----------------------------------------------------------------------------
+  # =============================================================================
+  # Installation/Toolchain
+  # =============================================================================
 
+  # -----------------------------------------------------------------------------
   # RubyMotion
-  # ----------
+  # -----------------------------------------------------------------------------
 
+  # version/presence
+  # ----------------
+
+  # Detects the presence of the `motion` command and, if present, determines
+  # its version.
+  #
+  # ==== Return
+  #
+  # A Hash describing the state of the `motion` command.
   def self.sense_rubymotion
     cmd = CommandResult.new 'motion --version'
     case cmd.status
@@ -232,6 +242,15 @@ class Wip
     end
   end
 
+  # Tests the RubyMotion version.
+  #
+  # ==== Attributes
+  #
+  # * +motion+ - The RubyMotion status information, as produced by +sense_rubymotion+.
+  #
+  # ==== Return
+  #
+  # A +TestResult+ object
   def self.test_rubymotion_version motion
     # TODO: are some versions considered deprecated? EOL?
     result = TestResult.new 'RubyMotion version'
@@ -252,9 +271,84 @@ class Wip
     result
   end
 
-  # rbenv
-  # -----
+  # available SDKs
+  # --------------
 
+  # Determines which SDK versions are present for the specified framework
+  #
+  # ==== Attributes
+  #
+  # * +framework_name+ - The 'pretty' name of the framework. Ex: "iOS"
+  # * +framework_subdir+ - The subdirectory name for the framework. Ex: "ios"
+  #
+  # ==== Return
+  #
+  # An array of Hashes, each of which describes a detected SDK version.
+  def self.get_rubymotion_sdks framework_name,
+                               framework_subdir=framework_name.downcase
+    rm_data_path = '/Library/RubyMotion/data'
+    framework_path = "#{rm_data_path}/#{framework_subdir}"
+
+    return [] unless File.directory? framework_path
+
+    sdks = []
+    Dir.entries(framework_path).each do |entry|
+      if File.directory? "#{framework_path}/#{entry}" and
+        entry.match('^\d+(\.\d+)*$')
+
+        entry_split = entry.split('.')
+        sdk_version = {
+          :major => entry_split[0].to_i,
+          :minor => entry_split[1].to_i,
+          :very_minor => entry_split[2].to_i,
+        }
+        sdks << sdk_version
+      end
+    end
+    sdks
+  end
+
+  # Tests the available SDK versions for a framework
+  #
+  # ==== Attributes
+  #
+  # * +sdks+ - An array of SDK versions, as produced by +get_rubymotion_sdks+
+  # * +framework_name+ - The 'pretty' name of the framework. Ex: "iOS"
+  #
+  # ==== Return
+  #
+  # A TestResult object
+  def self.test_rubymotion_sdks sdks,
+                                framework_name
+    # TODO: Are any of the frameworks considered mandatory?
+    result = TestResult.new "Supported #{framework_name} frameworks"
+    sdks.each do |sdk|
+      minor_component = ".#{sdk[:minor]}" if sdk[:minor] > 0
+      very_minor_component = ".#{sdk[:very_minor]}" if sdk[:very_minor] > 0
+      result.add(
+        TestDatum.new(
+          "#{sdk[:major]}#{minor_component}#{very_minor_component}",
+          :neutral))
+    end
+    if result.data.count == 0
+      result.add(TestDatum.new 'None', :neutral)
+    end
+    result
+  end
+
+  # -----------------------------------------------------------------------------
+  # rbenv
+  # -----------------------------------------------------------------------------
+
+  # version
+  # -------
+
+  # Detects the presence of the `rbenv` command and, if present, determines
+  # its version.
+  #
+  # ==== Return
+  #
+  # A Hash describing the state of the `rbenv` command.
   def self.sense_rbenv
     cmd = CommandResult.new 'rbenv --version'
     case cmd.status
@@ -287,6 +381,15 @@ class Wip
     end
   end
 
+  # Tests the `rbenv` version.
+  #
+  # ==== Attributes
+  #
+  # * +rbenv+ - The `rbenv` status information, as produced by +sense_rbenv+.
+  #
+  # ==== Return
+  #
+  # A +TestResult+ object
   def self.test_rbenv_version rbenv
     result = TestResult.new 'rbenv version'
     case rbenv[:state]
@@ -311,11 +414,22 @@ class Wip
     result
   end
 
-  # rbenv ruby versions
+  # rbenv Ruby versions
   # -------------------
 
-  def self.get_rbenv_ruby_versions rbenv
-    return nil unless rbenv[:state] == :present
+  # Determines which versions of Ruby are provided by `rbenv`.
+  # its version.
+  #
+  # ==== Attributes
+  #
+  # * +rbenv_state+ - The state of the `rbenv` command, as reported by +sense_rbenv+.
+  #
+  # ==== Return
+  #
+  # If `rbenv` is present, an Array of hashes, each of which describes a Ruby
+  # version. Otherwise, an empty Array.
+  def self.get_rbenv_ruby_versions rbenv_state
+    return [] unless rbenv_state == :present
 
     # TODO: do we consider "system" to be relevant? `rbenv versions --bare`
     # omits it, since it isn't supplied by rbenv
@@ -334,6 +448,15 @@ class Wip
     versions
   end
 
+  # Tests the versions of Ruby provided by `rbenv`.
+  #
+  # ==== Attributes
+  #
+  # * +versions+ - The array of Ruby versions, as produced by +get_rbenv_ruby_versions+.
+  #
+  # ==== Return
+  #
+  # A +TestResult+ object
   def self.test_rbenv_ruby_versions versions
     result = TestResult.new 'rbenv-supplied Ruby versions'
     if versions.nil?
@@ -352,9 +475,19 @@ class Wip
     result
   end
 
+  # -----------------------------------------------------------------------------
+  # Xcode
+  # -----------------------------------------------------------------------------
+
   # xcode-select
   # ------------
 
+  # Detects the presence of the `xcode-select` command and, if present,
+  # determines its version.
+  #
+  # ==== Return
+  #
+  # A Hash describing the state of the `xcode-select` command.
   def self.sense_xcode_select
     cmd = CommandResult.new 'xcode-select --version'
     case cmd.status
@@ -378,34 +511,69 @@ class Wip
     end
   end
 
+  # Tests the versions of xcode-select.
+  #
+  # ==== Attributes
+  #
+  # * +xcode_select+ - The `xcode-select` state as produced by +sense_xcode_select+
+  #
+  # ==== Return
+  #
+  # A +TestResult+ object
   def self.test_xcode_select_version xcode_select
-    return nil unless xcode_select[:state] == :present
-
-    # TODO:
-    # According to https://github.com/amirrajan/rubymotion-applied/issues/58
-    # Xcode 9.2 should be paired with 2349. As far as I can tell from my own system,
-    # that's still the xcode-select version present as late as 9.4.1 (latest non-beta)
-    #
-    # Since the RM version parities only go as far back as Xcode 9.2, which also
-    # requires 2349, I think maybe we just unconditionally want 2349 now? I'm
-    # also not entirely clear on what exactly controls the xcode-select
-    # version. I'm pretty sure this stands alone from Xcode, and would be
-    # relegated to the OSX version.
-    result = TestResult.new(
-      'xcode-select version',
-      [ TestDatum.new(xcode_select[:version]) ])
-    result.data[0].status = :bad unless xcode_select[:version] == 2349
+    result = TestResult.new 'xcode-select version'
+    case xcode_select[:state]
+    when :present
+      # TODO:
+      # According to https://github.com/amirrajan/rubymotion-applied/issues/58
+      # Xcode 9.2 should be paired with 2349. As far as I can tell from my own system,
+      # that's still the xcode-select version present as late as 9.4.1 (latest non-beta)
+      #
+      # Since the RM version parities only go as far back as Xcode 9.2, which also
+      # requires 2349, I think maybe we just unconditionally want 2349 now? I'm
+      # also not entirely clear on what exactly controls the xcode-select
+      # version. I'm pretty sure this stands alone from Xcode, and would be
+      # relegated to the OSX version.
+      result.add TestDatum.new(xcode_select[:version])
+      result.data[0].status = :bad unless xcode_select[:version] == 2349
+    when :absent
+      result.add TestDatum.new(
+                   'Not found',
+                   :bad)
+    when :failed
+      result.add TestDatum.new(
+                   'Failed',
+                   :bad,
+                   "#{motion[:fail_source]} reports: '#{motion[:error]}'")
+    end
     result
   end
 
   # Determines the active developer directory. I.e. `xcode-select --print-path`
+  #
+  # ==== Attributes
+  #
+  # * +xcode_select_state+ - The state of `xcode-select` as determined by
+  #                          +sense_xcode_select+
+  #
+  # ==== Return
+  #
+  # A string containing the Xcode path, if Xcode is installed. Otherwise,
+  # a string indicating that Xcode is not present.
   def self.get_xcode_path xcode_select_state
-    # Don't bother trying this unless we know `xcode-select` itself works.
-    return nil unless xcode_select_state == :present
-
+    return 'Xcode not installed' unless xcode_select_state == :present
     (CommandResult.new 'xcode-select --print-path').stdout.chop
   end
 
+  # Tests the active developer directory (i.e. Xcode directory).
+  #
+  # ==== Attributes
+  #
+  # * +path+ - The path as reported by +get_xcode_path+
+  #
+  # ==== Return
+  #
+  # A TestResult object
   def self.test_xcode_path path
     result = TestResult.new 'Xcode path'
     case path
@@ -438,6 +606,15 @@ class Wip
     result
   end
 
+  # Detects the presence of Xcode and, if present, determines its version.
+  #
+  # ==== Attributes
+  #
+  # * +xcode_path+ - The Xcode path as reported by +get_xcode_path+
+  #
+  # ==== Return
+  #
+  # A Hash describing the state of Xcode.
   def self.sense_xcode xcode_path
     # Bail early if xcode-select doesn't give us a valid path. This indicates
     # that Xcode isn't installed at all. Running `xcodebuild` in this case
@@ -470,7 +647,16 @@ class Wip
     end
   end
 
-  # Checks against the RubyMotion version for version parity.
+  # Tests the version of Xcode against the RubyMotion version for version parity.
+  #
+  # ==== Attributes
+  #
+  # * +xcode+ - The Xcode state as reported by +sense_xcode+
+  # * +rm_version+ - The installed version of RubyMotion as detected by +sense_rubymotion
+  #
+  # ==== Return
+  #
+  # A TestResult object
   def self.test_xcode_version xcode, rm_version
     result = TestResult.new 'Xcode version'
 
@@ -499,12 +685,15 @@ class Wip
       rm_5_10 => xc_9_4,
     }
     expected_version = rm_to_xcode_parities[rm_version]
+    # If the RubyMotion version wasn't detected, assume we want 9.4
     expected_version ||= xc_9_4
 
+    very_minor_component =
+      ".#{xcode[:version][:very_minor]}" if xcode[:version][:very_minor] > 0
     datum = TestDatum.new(
       "#{xcode[:version][:major]}." \
-      "#{xcode[:version][:minor]}." \
-      "#{xcode[:version][:very_minor]}")
+      "#{xcode[:version][:minor]}" \
+      "#{very_minor_component}")
     if xcode[:version] != expected_version
       datum.meta = "expected #{expected_version[:major]}" \
                    ".#{expected_version[:minor]}" \
@@ -525,49 +714,9 @@ class Wip
     result
   end
 
-  def self.get_motion_sdks framework_name,
-                          framework_subdir=framework_name.downcase
-    rm_data_path = '/Library/RubyMotion/data'
-    framework_path = "#{rm_data_path}/#{framework_subdir}"
-
-    return [] unless File.directory? framework_path
-
-    sdks = []
-    Dir.entries(framework_path).each do |entry|
-      if File.directory? "#{framework_path}/#{entry}" and
-        entry.match('^\d+(\.\d+)*$')
-
-        entry_split = entry.split('.')
-        sdk_version = {
-          :major => entry_split[0].to_i,
-          :minor => entry_split[1].to_i,
-          :very_minor => entry_split[2].to_i,
-        }
-        sdks << sdk_version
-      end
-    end
-    sdks
-  end
-
-  def self.test_motion_sdks sdks,
-                           framework_name
-    # TODO: Are any of the frameworks considered mandatory?
-    result = TestResult.new "Supported #{framework_name} frameworks"
-    sdks.each do |sdk|
-      result.add(
-        TestDatum.new(
-          "#{sdk[:major]}.#{sdk[:minor]}.#{sdk[:very_minor]}",
-          :neutral))
-    end
-    if result.data.count == 0
-      result.add(TestDatum.new 'None', :neutral)
-    end
-    result
-  end
-
-  # -----------------------------------------------------------------------------
+  # =============================================================================
   # Get{Foo}/Test{Foo}
-  # -----------------------------------------------------------------------------
+  # =============================================================================
 
   # Environment
   # -----------
@@ -589,11 +738,11 @@ class Wip
   def self.get_rubymotion_data
     motion = sense_rubymotion
     motion[:sdks] = {
-      :osx => get_motion_sdks('OSX'),
-      :ios => get_motion_sdks('iOS'),
-      :tvos => get_motion_sdks('tvOS'),
-      :watch => get_motion_sdks('watchOS', 'watch'),
-      :android => get_motion_sdks('Android'),
+      :osx => get_rubymotion_sdks('OSX'),
+      :ios => get_rubymotion_sdks('iOS'),
+      :tvos => get_rubymotion_sdks('tvOS'),
+      :watch => get_rubymotion_sdks('watchOS', 'watch'),
+      :android => get_rubymotion_sdks('Android'),
     }
     motion
   end
@@ -627,19 +776,19 @@ class Wip
     # RubyMotion tests
     print_test_result test_rubymotion_version(install[:motion])
 
-    print_test_result test_motion_sdks(
+    print_test_result test_rubymotion_sdks(
                         install[:motion][:sdks][:osx],
                         'OSX')
-    print_test_result test_motion_sdks(
+    print_test_result test_rubymotion_sdks(
                         install[:motion][:sdks][:ios],
                         'iOS')
-    print_test_result test_motion_sdks(
+    print_test_result test_rubymotion_sdks(
                         install[:motion][:sdks][:tvos],
                         'tvOS')
-    print_test_result test_motion_sdks(
+    print_test_result test_rubymotion_sdks(
                         install[:motion][:sdks][:watch],
                         'watchOS')
-    print_test_result test_motion_sdks(
+    print_test_result test_rubymotion_sdks(
                         install[:motion][:sdks][:android],
                         'Android')
 
