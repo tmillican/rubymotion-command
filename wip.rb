@@ -185,14 +185,123 @@ class Wip
   # Environment
   # =============================================================================
 
+  # Determines the OSX version using `sw_vers`
+  #
+  # ==== Return
+  #
+  # A Hash describing the OSX version if `sw_vers` succeeds, or describing the
+  # failure otherwise.
+  def self.sense_osx
+    cmd = CommandResult.new 'sw_vers'
+    case cmd.status
+    when :success
+      lines = cmd.stdout.split("\n")
+      major = lines[1].sub(/^ProductVersion:\W+(\d+)/, '\1').to_i
+      minor = lines[1].sub(/^ProductVersion:\W+\d+\.(\d+)/, '\1').to_i
+      versions_to_code_names = {
+        '10.0' => 'Cheeta',
+        '10.1' => 'Puma',
+        '10.2' => 'Jaguar',
+        '10.3' => 'Panther',
+        '10.4' => 'Tiger',
+        '10.5' => 'Leopard',
+        '10.6' => 'Snow Leopard',
+        '10.7' => 'Lion',
+        '10.8' => 'Mountain Lion',
+        '10.9' => 'Mavericks',
+        '10.10' => 'Yosemite',
+        '10.11' => 'El Capitan',
+        '10.12' => 'Sierra',
+        '10.13' => 'High Sierra',
+        '10.14' => 'Mojave',
+      }
+      {
+        :state => :present,
+        :version => {
+          :major => major,
+          :minor => minor,
+          :very_minor => lines[1].sub(/^ProductVersion:\W+\d+\.\d+\.(\d+)/, '\1').to_i,
+          :build => lines[2].sub(/^BuildVersion:\W+(\w+)/, '\1'),
+          :code_name => versions_to_code_names["#{major}.#{minor}"],
+        }
+      }
+    when :not_found
+      {
+        :state => :absent,
+      }
+    when :failure
+      {
+        :state => :failed,
+        :fail_source => 'sw_vers',
+        :err => cmd.stderr,
+      }
+    when :sys_failure
+      {
+        :state => :failed,
+        :fail_source => 'system',
+        :err => cmd.syserror.message,
+      }
+    end
+  end
+
+  # Tests the OSX version.
+  #
+  # ==== Attributes
+  #
+  # * +osx+ - The OSX state as reported by +sense_osx+
+  #
+  # ==== Return
+  #
+  # A TestResult object.
+  def self.test_osx_version osx
+    result = TestResult.new 'OSX version'
+    case osx[:state]
+    when :present
+      very_minor_component =
+        ".#{osx[:version][:very_minor]}" if osx[:version][:very_minor] > 0
+      code_name_component =
+        " (#{osx[:version][:code_name]})" if osx[:version][:code_name]
+      result.add(
+        TestDatum.new "#{osx[:version][:major]}" \
+                      ".#{osx[:version][:minor]}" \
+                      "#{very_minor_component}" \
+                      "#{code_name_component}")
+        if osx[:version][:major] < 10 or
+          (osx[:version][:major] == 10 and osx[:version][:minor] < 12)
+          result.data[0].status = :bad
+        end
+    when :absent
+      result.add(
+        TestDatum.new('Indeterminate',
+                      :bad,
+                      '`sw_vers` not found'))
+    when :failed
+      result.add(
+        TestDatum.new('Indeterminate',
+                      :bad,
+                      "#{osx[:fail_source]} reports: #{osx[:err]}"))
+    end
+    result
+  end
+
+  # Determines the working directory
   def self.get_working_directory
     Dir.pwd
   end
 
+  # Tests the working directory.
+  #
+  # ==== Attributes
+  #
+  # * +wd+ - The working directory as reported by +get_working_directory+
+  #
+  # ==== Return
+  #
+  # A TestResult object.
   def self.test_working_directory wd
     TestResult.new(
       'Working directory',
-      [TestDatum.new(wd)])
+      [TestDatum.new(wd, :neutral)])
   end
 
   # =============================================================================
@@ -257,7 +366,8 @@ class Wip
     case motion[:state]
     when :present
       result.add TestDatum.new("#{motion[:version][:major]}" \
-                               ".#{motion[:version][:minor]}")
+                               ".#{motion[:version][:minor]}",
+                               :neutral)
     when :absent
       result.add TestDatum.new(
                    'Not found',
@@ -723,12 +833,14 @@ class Wip
 
   def self.get_environment_data
     {
-      :wd => get_working_directory
+      :osx => sense_osx,
+      :wd => get_working_directory,
     }
   end
 
   def self.test_environment_data env
     print_section_header "Environment"
+    print_test_result test_osx_version env[:osx]
     print_test_result test_working_directory env[:wd]
   end
 
@@ -815,6 +927,7 @@ class Wip
     test_environment_data env
     test_installation_data install
 
+    print_section_header "Guru Meditation"
     pp env
     pp install
   end
