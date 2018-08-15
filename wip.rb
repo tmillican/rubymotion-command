@@ -824,6 +824,109 @@ class Wip
     result
   end
 
+  # -----------------------------------------------------------------------------
+  # Java
+  # -----------------------------------------------------------------------------
+
+  # Detects the presence of the `javac` command and, if present, determines
+  # its version.
+  #
+  # ==== Return
+  #
+  # A Hash describing the state of the `javac` command.
+  def self.sense_java
+    cmd = CommandResult.new 'javac -version'
+    case cmd.status
+    when :success
+      # TIL: javac spits out -version to stderr...
+      version_split = cmd.stderr.chop.split(' ')[1].split('.')
+      {
+        :state => :present,
+        :version => {
+          :major => version_split[0].to_i,
+          :minor => version_split[1].to_i,
+          :very_minor => version_split[2].sub(/^(\d+)_\d+$/, '\1').to_i,
+          :build => version_split[2].sub(/^\d+_(\d+)$/, '\1').to_i,
+        }
+      }
+    when :not_found
+      {
+        :state => :absent,
+      }
+    when :failure
+      {
+        :state => :failed,
+        :fail_source => 'motion',
+        :err => cmd.stderr,
+      }
+    when :sys_failure
+      {
+        :state => :failed,
+        :fail_source => 'system',
+        :err => cmd.syserror.message,
+      }
+    end
+  end
+
+  # Tests the Java version.
+  #
+  # ==== Attributes
+  #
+  # * +java+ - The Java status information, as produced by +sense_java+.
+  #
+  # ==== Return
+  #
+  # A +TestResult+ object
+  def self.test_java_version java
+    result = TestResult.new 'Java version'
+    case java[:state]
+    when :present
+      result.add(
+        TestDatum.new(
+          "#{java[:version][:major]}" \
+          ".#{java[:version][:minor]}" \
+          ".#{java[:version][:very_minor]}" \
+          "_#{java[:version][:build]}",
+          :neutral))
+      # TODO: minimum Java? 1.8 preferred? I think the guide is out of date.
+      # result.data[0].status = :bad if java[:version][:minor] < 7
+    when :absent
+      result.add TestDatum.new(
+                   'Not found',
+                   :bad)
+    when :failed
+      result.add TestDatum.new(
+                   'Failed',
+                   :bad,
+                   "#{java[:fail_source]} reports: '#{motion[:error]}'")
+    end
+    result
+  end
+
+  # Gets the JAVA_HOME environment variable.
+  def self.get_java_home
+    ENV['JAVA_HOME']
+  end
+
+  # Tests the JAVA_HOME environment variable.
+  #
+  # ==== Attributes
+  #
+  # * +home+ - The JAVA_HOME value
+  #
+  # ==== Return
+  #
+  # A +TestResult+ object
+  def self.test_java_home home
+    result = TestResult.new 'Java home'
+    if home
+      result.add(TestDatum.new home, :neutral)
+    else
+      result.add(TestDatum.new 'Not set', :bad)
+    end
+    result
+  end
+
   # =============================================================================
   # Get{Foo}/Test{Foo}
   # =============================================================================
@@ -874,11 +977,18 @@ class Wip
     xcode
   end
 
+  def self.get_java_data
+    java = sense_java
+    java[:home] = get_java_home
+    java
+  end
+
   def self.get_installation_data
     {
       :motion => get_rubymotion_data,
       :rbenv => get_rbenv_data,
       :xcode => get_xcode_data,
+      :java => get_java_data,
     }
   end
 
@@ -915,6 +1025,10 @@ class Wip
     print_test_result test_xcode_select_version install[:xcode][:xcode_select]
     print_test_result test_xcode_path install[:xcode][:path]
 
+    # Java tests
+    print_test_result test_java_version install[:java]
+    print_test_result test_java_home install[:java][:home]
+
     install
   end
 
@@ -930,6 +1044,7 @@ class Wip
     print_section_header "Guru Meditation"
     pp env
     pp install
+
   end
 end
 
