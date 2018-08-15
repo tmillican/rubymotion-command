@@ -928,6 +928,41 @@ class Wip
   end
 
   # =============================================================================
+  # Project
+  # =============================================================================
+
+  def self.get_rake_config
+    cmd = CommandResult.new 'rake config'
+    case cmd.status
+    when :success
+      config = {}
+      cmd.stdout.split("\n").each do |line|
+        key = line.sub(/^(\w+)\W.*$/, '\1').to_sym
+        # TODO: Warning, danger Wil Robinson
+        value = eval line.sub(/^\w+\W+:[ \t]+(.*)$/, '\1')
+        config[key] = value
+      end
+      config
+    when :not_found
+      {
+        :state => :absent,
+      }
+    when :failure
+      {
+        :state => :failed,
+        :fail_source => 'rake',
+        :err => cmd.stderr,
+      }
+    when :sys_failure
+      {
+        :state => :failed,
+        :fail_source => 'system',
+        :err => cmd.syserror.message,
+      }
+    end
+  end
+
+  # =============================================================================
   # Get{Foo}/Test{Foo}
   # =============================================================================
 
@@ -1032,6 +1067,44 @@ class Wip
     install
   end
 
+  # Project
+  # -------
+
+  # Determines whether the current directory is a RubyMotion project
+  #
+  # This is an awful heuristic, but if it's dumb and it works...
+  def self.motion_project? wd
+    rakefile_name = "#{wd}/Rakefile"
+    if File.file? rakefile_name
+      File.open(rakefile_name).each do |line|
+        return true if line.match(/RubyMotion/)
+      end
+    end
+    return false
+  end
+
+  def self.get_project_data
+    {
+      :config => get_rake_config
+    }
+  end
+
+  def self.test_project_data proj
+    print_section_header "Project Tests"
+
+    proj[:config].keys.each do |key|
+      print_test_result(
+        TestResult.new(
+          key.to_s,
+          [TestDatum.new(
+            proj[:config][key],
+            :neutral)]))
+    end
+  end
+
+  # Do the things
+  # -------------
+
   def self.run
     print_report_header "RubyMotion Doctor"
 
@@ -1041,9 +1114,15 @@ class Wip
     test_environment_data env
     test_installation_data install
 
+    if motion_project? env[:wd]
+      proj = get_project_data
+      test_project_data proj
+    end
+
     print_section_header "Guru Meditation"
     pp env
     pp install
+    pp proj if proj
 
   end
 end
