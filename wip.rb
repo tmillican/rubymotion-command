@@ -1092,14 +1092,14 @@ class Wip
   def self.test_project_data proj
     print_section_header "Project Tests"
 
-    proj[:config].keys.each do |key|
-      print_test_result(
-        TestResult.new(
-          key.to_s,
-          [TestDatum.new(
-            proj[:config][key],
-            :neutral)]))
-    end
+    # proj[:config].keys.each do |key|
+    #   print_test_result(
+    #     TestResult.new(
+    #       key.to_s,
+    #       [TestDatum.new(
+    #         proj[:config][key],
+    #         :neutral)]))
+    # end
   end
 
   # Do the things
@@ -1119,10 +1119,10 @@ class Wip
       test_project_data proj
     end
 
-    print_section_header "Guru Meditation"
-    pp env
-    pp install
-    pp proj if proj
+    # print_section_header "Guru Meditation"
+    # pp env
+    # pp install
+    # pp proj if proj
 
   end
 end
